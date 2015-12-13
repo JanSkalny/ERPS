@@ -1,0 +1,104 @@
+--- sys/dev/netmap/netmap_kern.h	2015-12-05 03:20:20.420422000 +0100
++++ sys/dev/netmap/netmap_kern.h	2015-12-08 04:25:41.751933000 +0100
+@@ -1956,4 +1956,6 @@
+ int netmap_pt_guest_rxsync(struct netmap_kring *kring, int flags, int *notify);
+ #endif /* WITH_PTNETMAP_GUEST */
+
++int netmap_bdg_inject(struct netmap_adapter *na, uint8_t *data, int len);
++
+ #endif /* _NET_NETMAP_KERN_H_ */
+--- sys/dev/netmap/netmap_vale.c	2015-12-04 23:15:08.281803000 +0100
++++ sys/dev/netmap/netmap_vale.c	2015-12-08 03:56:32.477194000 +0100
+@@ -2676,4 +2677,92 @@
+ 	netmap_uninit_bridges2(nm_bridges, NM_BRIDGES);
+ #endif
+ }
++
++int 
++netmap_bdg_inject(struct netmap_adapter *na, uint8_t *data, int len) 
++{
++	struct netmap_kring *kring;
++	struct netmap_ring *ring;
++	struct netmap_slot *slot;
++	int lim, write_idx, slot_idx, lease_idx;
++	uint8_t *buf;
++	uint32_t *leases;
++	bool notify=false;
++
++	mb(); /* make sure following reads are not from cache */
++
++	kring = &na->rx_rings[0];
++	ring = kring->ring;
++	lim = kring->nkr_num_slots - 1;
++	leases = kring->nkr_leases;
++
++	if (!kring) {
++		D("kring missing!");
++		goto cleanup;
++	}
++	if (!ring) {
++		D("invalid kring - missing ring!");
++		goto cleanup;
++	}
++
++	// lease one write slot 
++	mtx_lock(&kring->q_lock);
++	if (kring->nkr_stopped) {
++		D("ring is stopped");
++		goto unlock_cleanup;
++	}
++	if (nm_kr_space(kring, 1) <= 0) {
++		D("ring is full");
++		goto unlock_cleanup;
++	}
++	slot_idx = kring->nkr_hwlease;
++	lease_idx = nm_kr_lease(kring, 1, 1);
++	mtx_unlock(&kring->q_lock);
++
++	// copy data into slot
++	slot = &ring->slot[slot_idx];
++	buf = NMB(na, slot);
++
++	if (unlikely(len > NETMAP_BUF_SIZE(na))) {
++		D("buffer too small!");
++		len = NETMAP_BUF_SIZE(na);
++	}
++	pkt_copy(data, buf, len);
++	slot->len = len;
++	slot->flags = 0;
++
++	mtx_lock(&kring->q_lock);
++
++	// mark our slot as done
++	leases[lease_idx] = write_idx = nm_next(slot_idx, lim);
++
++	// all previous slots have been completed, so it's up to us to clean up
++	if (slot_idx == kring->nr_hwtail) {
++		// free up all finished leases
++		while (lease_idx != kring->nkr_lease_idx && leases[lease_idx] != NR_NOSLOT) {
++			write_idx = leases[lease_idx];		// advance write slot inde
++			leases[lease_idx] = NR_NOSLOT;
++			lease_idx = nm_next(lease_idx, lim);
++		}
++		// if we have somethign to write, do so
++		if (write_idx != slot_idx) {
++			kring->nr_hwtail = write_idx;
++			notify = true;
++		}
++	}
++	mtx_unlock(&kring->q_lock);
++
++	// send data to hw...
++	if (notify) {
++		kring->nm_notify(kring, 0);
++	}
++
++	return 0;
++
++unlock_cleanup:
++	mtx_unlock(&kring->q_lock);
++cleanup:
++	return EINVAL;
++}
++
+ #endif /* WITH_VALE */
