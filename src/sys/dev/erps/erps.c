@@ -12,6 +12,8 @@
 #include <sys/socket.h>
 #include <sys/selinfo.h>
 #include <net/if.h>
+#include <net/if_var.h>
+#include <net/if_types.h>
 
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
@@ -24,27 +26,30 @@ struct er_port;
 
 static struct er_ring *er_global=0;
 
+void *er_malloc(size_t);
+void er_free(void *);
+
 struct er_port *er_lookup_ring_port(struct er_ring *ring, char *name);
-struct er_port *er_create_port(char *name, int ring_id);
-void er_destroy_port(struct er_port *port);
+struct er_port *er_create_port(char *name, struct er_ring *ring);
+void er_destroy_port(struct er_port *port, struct er_ring *ring);
 
 bool er_block_ring_port(struct er_ring *ring, struct er_port *port);
 bool er_unblock_ring_port(struct er_ring *ring, struct er_port *port);
 
 struct er_ring *er_lookup_ring(uint16_t ring_id);
-struct er_ring *er_create_ring(uint16_t ring_id, struct er_port *port0, struct er_port *port1);
+struct er_ring *er_create_ring(uint16_t ring_id, char *port0_name, char *port1_name);
 void er_destroy_ring(struct er_ring *ring);
 bool er_activate_ring(struct er_ring *ring);
 bool er_deactivate_ring(struct er_ring *ring);
 bool er_attach_ring_port(struct er_ring *ring, struct er_port *port); 
 
 // netmap wrapper functions
-int er_netmap_detach(struct er_port *port);
-int er_netmap_attach(struct er_port *port);
+int er_netmap_detach(struct er_ring *ring, struct er_port *port);;
+int er_netmap_attach(struct er_ring *ring, struct er_port *port);;
 int er_netmap_get_adapter(struct er_port *port);
 int er_netmap_unget_adapter(struct er_port *port);
-//int er_netmap_get_indices(int ring_id, char *port_name, int *bridge_idx, int *port_idx);
-int er_netmap_activate_erps(int ring_id);
+int er_netmap_get_indices(int ring_id, char *port_name, int *bridge_idx, int *port_idx);
+int er_netmap_regops(struct er_ring *ring);
 static u_int er_netmap_forward_lookup(struct nm_bdg_fwd *ft, uint8_t *ring_nr, struct netmap_vp_adapter *na);
 struct mbuf* er_netmap_get_buf(int len);
 int er_netmap_send(struct er_port *port, struct mbuf *buf, int len);
@@ -86,7 +91,7 @@ static struct cdevsw er_cdevsw = {
 	.d_name = "erps",
 };
 
-static struct cdev *er_dev;
+static struct cdev *er_cdev;
 
 
 // ERPS internal structures
@@ -94,7 +99,6 @@ struct er_port {
 	char name[IFNAMSIZ];
 	struct netmap_adapter *na;
 	struct ifnet *ifp;
-	int ring_id;
 	int idx;
 
 	eventhandler_tag link_event;
@@ -110,6 +114,8 @@ struct er_ring {
 
 	struct mtx mtx;
 	struct callout callout;
+	void * vale_auth_token;
+	char vale_name[IFNAMSIZ];
 
     // ring configuration
     bool is_rpl_owner;
@@ -128,24 +134,80 @@ struct er_ring {
 	bool active;
 };
 
-int er_netmap_attach(struct er_port *port) {
+MALLOC_DECLARE(M_ERPS);
+MALLOC_DEFINE(M_ERPS, "erps", "ethernet ring protection switching");
+
+void *er_malloc(size_t size) {
+    return malloc(size, M_ERPS, M_NOWAIT | M_ZERO);
+}
+
+void er_free(void *addr) {
+    free(addr, M_ERPS);
+}
+
+
+int er_netmap_attach(struct er_ring *ring, struct er_port *port) {
+	int err = 0;
+#ifdef FBSD12
+	struct nmreq_header hdr;
+	struct nmreq_vale_attach req;
+
+	bzero(&hdr, sizeof(hdr));
+	bzero(&req, sizeof(req));
+
+	// attach device to VALE bridge
+        hdr.nr_version = NETMAP_API; 
+	snprintf(hdr.nr_name, sizeof(hdr.nr_name)-1, "%s%s", ring->vale_name, port->name);
+        hdr.nr_options = (uintptr_t)NULL;
+	hdr.nr_body = (uintptr_t)&req;
+	hdr.nr_reqtype = NETMAP_REQ_VALE_ATTACH;
+
+	req.reg.nr_mode = NR_REG_ALL_NIC;
+
+	err = nm_bdg_ctl_attach(&hdr, ring->vale_auth_token);
+	if (err) {
+		E("failed to attach port %s. err=%d", hdr.nr_name, err);
+	} else {
+		port->idx = req.port_index;
+		E("attached %s as index %d", hdr.nr_name, req.port_index);
+	}
+#else
 	struct nmreq nmr;
-	int err;
 
 	// attach device to VALE bridge
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_cmd = NETMAP_BDG_ATTACH;
 	nmr.nr_flags = NR_REG_ALL_NIC;
 	nmr.nr_version = NETMAP_API;
-	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "valeERPS%d:%s", port->ring_id, port->name);
+	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "%s%s", ring->vale_name, port->name);
 	err = netmap_bdg_ctl(&nmr, 0);
 	if (err)
 		E("failed to attach port %s", nmr.nr_name);
+#endif
 
 	return err;
 }
 
-int er_netmap_detach(struct er_port *port) {
+int er_netmap_detach(struct er_ring *ring, struct er_port *port) {
+#ifdef FBSD12
+	struct nmreq_header hdr;
+	struct nmreq_vale_detach req;
+	int err = 0;
+
+	bzero(&hdr, sizeof(hdr));
+	bzero(&req, sizeof(req));
+
+	// detach device from VALE bridge
+        hdr.nr_version = NETMAP_API; 
+	snprintf(hdr.nr_name, sizeof(hdr.nr_name)-1, "%s%s", ring->vale_name, port->name);
+        hdr.nr_options = (uintptr_t)NULL;
+	hdr.nr_body = (uintptr_t)&req;
+	hdr.nr_reqtype = NETMAP_REQ_VALE_DETACH;
+
+	err = nm_bdg_ctl_detach(&hdr, ring->vale_auth_token);
+	if (err) 
+		E("failed to detach port %s", hdr.nr_name);
+#else
 	struct nmreq nmr;
 	int err;
 
@@ -153,15 +215,15 @@ int er_netmap_detach(struct er_port *port) {
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_cmd = NETMAP_BDG_DETACH;
 	nmr.nr_version = NETMAP_API;
-	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "valeERPS%d:%s", port->ring_id, port->name);
+	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "%s%s", ring->vale_name, port->name);
 	err = netmap_bdg_ctl(&nmr, 0);
 	if (err) 
 		E("failed to detach port %s", nmr.nr_name);
+#endif
 
 	return err;
 }
 
-# if 0
 int er_netmap_get_indices(int ring_id, char *port_name, int *bridge_idx, int *port_idx) {
 	struct nmreq nmr;
 	int err;
@@ -181,21 +243,18 @@ int er_netmap_get_indices(int ring_id, char *port_name, int *bridge_idx, int *po
 
 	return 0;
 }
-#endif 
 
 int er_netmap_get_adapter(struct er_port *port) {
 	struct nmreq nmr;
-	//XXX:struct ifnet *ifp=0;
 	int err;
 
 	// get port from VALE bridge
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
-	//XXX:snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "valeERPS%d:%s", port->ring_id, port->name);
 	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "%s", port->name);
 
 	NMG_LOCK();
-#ifdef WITH_NETMAP_HEAD
+#ifdef FBSD12
 	err = netmap_get_na(&nmr, &port->na, &port->ifp, 0);
 #else
 	err = netmap_get_na(&nmr, &port->na, 0);
@@ -204,31 +263,28 @@ int er_netmap_get_adapter(struct er_port *port) {
 
 	if (err) {
 		E("netmap_get_na: failed");
-		goto cleanup;
+		return EINVAL;
 	}
 	if (!port->na) {
 		E("netmap_get_na: na not found");
 		goto cleanup;
 	}
-#ifdef WITH_NETMAP_HEAD
+#ifdef FBSD12
 	if (!port->ifp) {
 		E("netmap_get_na faield to get ifp");
-		//E("netmap_get_na: ifp allocated - should not appear here!?!");
 		goto cleanup;
 	}
 #endif
-
 	return 0;
 
 cleanup:
 	er_netmap_unget_adapter(port);
-
 	return EINVAL;
 }
 
 int er_netmap_unget_adapter(struct er_port *port) {
 	NMG_LOCK();
-#ifdef WITH_NETMAP_HEAD
+#ifdef FBSD12
 	netmap_unget_na(port->na, port->ifp);
 #else
 	netmap_adapter_put(port->na);
@@ -245,7 +301,7 @@ static u_int er_netmap_forward_lookup(struct nm_bdg_fwd *ft, uint8_t *ring_nr, s
 	// lookup ring, this bridge belongs to
 	//XXX: multi-ring support
 	// ring = (struct er_ring*) na->arg1;
-	ring = er_lookup_ring(0);
+	ring = er_lookup_ring(ring_nr);
 
 	// drop frame, if no active ring is found
 	if (!ring || !ring->active)
@@ -328,22 +384,22 @@ void er_process_raps_frame(struct er_ring *ring, uint8_t *data, int len, struct 
 }
 
 
-int er_netmap_activate_erps(int ring_id) {
-	struct nmreq nmr;
+int er_netmap_regops(struct er_ring *ring) {
 	int err;
-	static struct netmap_bdg_ops ops = {0, 0, 0};
- 
-	//XXX: add mutli-ring support
-	// ops.param = ring;
-	ops.lookup = (bdg_lookup_fn_t)er_netmap_forward_lookup;
+	static struct netmap_bdg_ops ops = {er_netmap_forward_lookup, 0, 0};
 
+#ifdef FBSD12
+	err = netmap_bdg_regops(ring->vale_name, &ops, 0, ring->vale_auth_token);
+#else
+	struct nmreq nmr;
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
 	nmr.nr_cmd = NETMAP_BDG_REGOPS;
-	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "valeERPS%d:", ring_id);
+	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "%s", ring->vale_name);
 	err = netmap_bdg_ctl(&nmr, &ops);
+#endif
 	if (err) {
-		D("failed to register custom ops on valeERPS%d: bridge (errno=%d)", ring_id, err);
+		E("failed to register custom ops on %s bridge (errno=%d)", ring->vale_name, err);
 		return err;
 	}
 
@@ -356,11 +412,19 @@ void er_destroy_ring(struct er_ring *ring) {
 		er_deactivate_ring(ring);
 
 	// remove all ring ports 
-	er_destroy_port(ring->port0);
-	er_destroy_port(ring->port1);
+	if (ring->port0)
+		er_destroy_port(ring->port0, ring);
+	if (ring->port1)
+		er_destroy_port(ring->port1, ring);
+#ifdef FBSD12
+	// cleanup netmap stuff
+	if (ring->vale_auth_token) {
+		netmap_vale_destroy(ring->vale_name, ring->vale_auth_token);
+	}
+#endif
 
 	// release allocated memory
-	free(ring, M_DEVBUF);
+	er_free(ring);
 }
 
 void er_destroy_all_rings(void) {
@@ -395,59 +459,60 @@ _er_ifnet_link_event(void *arg, struct ifnet *ifp, int linkstate)
 	(void)ring;
 }
 
-struct er_port *er_create_port(char *name, int ring_id) {
+struct er_port *er_create_port(char *name, struct er_ring *ring) {
 	struct er_port *port=0;
+	int tmp;
 
 	// create new "ring link" structure
-	port = malloc(sizeof(struct er_port), M_DEVBUF, M_NOWAIT|M_ZERO);
+	port = er_malloc(sizeof(struct er_port));
 	if (!port) {
 		E("malloc failed");
 		goto cleanup;
 	}
 	strncpy(port->name, name, sizeof(port->name));
-	port->ring_id = ring_id;
+	port->name[sizeof(port->name)-1] = 0;
+	port->idx = NM_BDG_NOPORT;
 
-	if (er_netmap_attach(port)) 
+	if (er_netmap_attach(ring, port)) 
 		goto cleanup;
 	if (er_netmap_get_adapter(port)) 
 		goto cleanup;
-	if (er_netmap_activate_erps(port->ring_id)) 
-		goto cleanup;
 
-	// save port index for looups in er_netmap_forward_lookup
-	port->idx = ((struct netmap_vp_adapter *)port->na)->bdg_port;
+	// save port index for lookups in er_netmap_forward_lookup
+	er_netmap_get_indices(ring->id, port->name, &tmp, &(port->idx));
+	//XXX: port->idx = ((struct netmap_vp_adapter *)port->na)->bdg_port;
 
 	// catch all interface link events
 	port->link_event = EVENTHANDLER_REGISTER(ifnet_link_event, _er_ifnet_link_event, port, EVENTHANDLER_PRI_FIRST);
 
-	D("attached %s as %d na=%p", port->name, port->idx, port->na);
+	E("attached %s as %d na=%p", port->name, port->idx, port->na);
 
 	return port;
 
 cleanup:
 	if (port) {
 		er_netmap_unget_adapter(port);
-		er_netmap_detach(port);
-		free(port, M_DEVBUF);
+		er_netmap_detach(ring, port);
+		er_free(port);
 	}
 	return 0;
 }
 
-void er_destroy_port(struct er_port *port) {
+void er_destroy_port(struct er_port *port, struct er_ring *ring) {
 	D("detach %s", port->name);
 
 	if (port->link_event)
 		EVENTHANDLER_DEREGISTER(ifnet_link_event, port->link_event);
 	er_netmap_unget_adapter(port);
-	er_netmap_detach(port);
-	free(port, M_DEVBUF);
+	er_netmap_detach(ring, port);
+	er_free(port);
 }
 
 
-struct er_ring *er_create_ring(uint16_t ring_id, struct er_port *port0, struct er_port *port1) {
+struct er_ring *er_create_ring(uint16_t ring_id, char *port0_name, char *port1_name) {
 	struct er_ring *ring=0;
 
-	ring = malloc(sizeof(struct er_ring), M_DEVBUF, M_NOWAIT|M_ZERO);
+	ring = er_malloc(sizeof(struct er_ring));
 	if (!ring) {
 		E("malloc failed");
 		return 0;
@@ -455,15 +520,55 @@ struct er_ring *er_create_ring(uint16_t ring_id, struct er_port *port0, struct e
 
 	ring->active = false;
 	ring->id = ring_id;
+#ifdef FBSD12
+	ring->vale_auth_token = NULL;
+#endif
+	snprintf(ring->vale_name, sizeof(ring->vale_name)-1, "valeERPS%d:", ring_id);
 
-	// attach ports to this ring
-	ring->port0 = port0;
-	ring->port1 = port1;
+#ifdef FBSD12
+	int err;
+
+	NMG_LOCK();
+	ring->vale_auth_token = netmap_vale_create(ring->vale_name, &err);
+	NMG_UNLOCK();
+	if (err != 0 || ring->vale_auth_token==NULL) {
+		E("failed to create vale bridge: err=%d", err);
+		goto cleanup;
+	}
+
+
+#endif
+
+	ring->port0 = er_create_port(port0_name, ring);
+	if (!ring->port0) {
+		E("failed to open port %s", port0_name);
+		goto cleanup;
+	}
+
+	ring->port1 = er_create_port(port1_name, ring);
+	if (!ring->port1) {
+		E("failed to open port %s", port1_name);
+		goto cleanup;
+	}
+
+	er_netmap_regops(ring);
 
 	//XXX: add multi-ring support
 	er_global = ring;
 
 	return ring;
+
+cleanup:
+/*
+	if (ring->vale_auth_token != NULL) {
+		E("netmap_vale_destroy");
+		netmap_vale_destroy(vale_name, ring->vale_auth_token);
+	}
+
+*/
+	er_free(ring);
+
+	return 0;
 }
 
 #if 0
@@ -570,7 +675,7 @@ static void er_send_raps(void *arg) {
 
 	//netmap_bdg_injection_test(ring->port0->na);
 	//netmap_bdg_injection_test((struct netmap_adapter*)ring->port0->na->na_vp);
-#if 1
+#if 0
 	if (netmap_bdg_inject((struct netmap_adapter*)ring->port0->na->na_vp, data, 55)) {
 		E("failed to send R-APS message on port0");
 		goto cleanup;
@@ -706,28 +811,18 @@ static int er_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struc
 			return EINVAL;
 		}
 
-		// attach ports to valeRing{ID} bridge
-		port0 = er_create_port(req->er_port0, req->er_id);
-		port1 = er_create_port(req->er_port1, req->er_id);
-		if (!port0) {
-			E("failed to open port %s", req->er_port0);
-			return EINVAL;
-		}
-		if (!port1) {
-			E("failed to open port %s", req->er_port1);
-			return EINVAL;
-		}
-
-		switch(req->er_rpl_port) {
-		case ERPS_RPL_PORT0: rpl = port0; break;
-		case ERPS_RPL_PORT1: rpl = port1; break;
-		}
+		// validate port names
+		//TODO
 
 		// create new ring
-		ring = er_create_ring(req->er_id, port0, port1);
+		ring = er_create_ring(req->er_id, req->er_port0, req->er_port1);
 		if (!ring) {
 			E("failed to create ring");
 			return EINVAL;
+		}
+		switch(req->er_rpl_port) {
+		case ERPS_RPL_PORT0: rpl = ring->port0; break;
+		case ERPS_RPL_PORT1: rpl = ring->port1; break;
 		}
 
 		// configure ring according to request, while validating inputs
@@ -817,16 +912,20 @@ static int er_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struc
 // freebsd kernel module stuff
 
 int er_module_init(void) {
-	er_dev = make_dev(&er_cdevsw, 0, UID_ROOT, GID_WHEEL, 0600, "erps");
-	//XXX:error = kproc_create(proc_routine, "I'm kproc", &foobar_proc, 0, 0, "kproc");
-	// https://stackoverflow.com/questions/13898249/how-to-unload-a-kernel-module-which-has-created-kproc-kthread-in-freebsd
+	int err;
+
+	err = make_dev_p(MAKEDEV_CHECKNAME|MAKEDEV_WAITOK, &er_cdev, &er_cdevsw, 0, UID_ROOT, GID_WHEEL, 0600, "erps");
+	if (err) {
+		E("failed to create erps device");
+		return err;
+	}
 
 	return 0;
 }
 
 void er_module_fini(void) {
 	er_destroy_all_rings();
-	destroy_dev(er_dev);
+	destroy_dev(er_cdev);
 }
 
 static int er_module_handler(struct module *module, int event, void *arg) {
@@ -848,4 +947,4 @@ static int er_module_handler(struct module *module, int event, void *arg) {
 }
 
 DEV_MODULE(erps, er_module_handler, NULL);
-
+MODULE_DEPEND(erps, netmap, 1, 1, 1);
