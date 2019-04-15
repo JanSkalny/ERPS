@@ -98,6 +98,8 @@ bool ri_raps_parse(struct ri_raps *frame, uint8_t *data, int len) {
 bool ri_raps_encode(struct ri_raps *frame, uint8_t *data, int max_len) {
 	assert(data);
 
+	D("ri_raps_encode");
+
 	if (max_len < 55)
 		return false;
 

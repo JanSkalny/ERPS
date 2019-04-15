@@ -51,6 +51,14 @@ struct ring {
 	bool guard_timer_active;
 	tick_t guard_timer_active_since;
 
+	// WTR timer
+	bool wtr_timer_active;
+	tick_t wtr_timer_active_since;
+
+	// WTB timer
+	bool wtb_timer_active;
+	tick_t wtb_timer_active_since;
+
 	// top priority local request -- either FS, MS or SF
 	enum ring_request local_request; 
 
@@ -77,6 +85,7 @@ void ring_process_raps(struct ring *ring, uint8_t *data, int len, struct ring_po
 
 void ring_process_request(struct ring *r, enum ring_request request, struct ring_port *port, uint8_t *raps_node_id);
 void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uint8_t *raps_node_id);
+void ring_timer(struct ring *ring);
 
 struct ring_port* ring_other_port(struct ring *ring, struct ring_port *port);
 

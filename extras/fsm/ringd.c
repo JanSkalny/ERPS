@@ -5,6 +5,21 @@
 #include "ring_port.h"
 #include "ring.h"
 
+struct port_io {
+	struct ev_io io;
+	struct ring *ring;
+	struct ring_port *port;
+};
+
+struct ring_timer  {
+	struct ev_timer timer;
+	struct ring *ring;
+};
+
+
+struct ring_timer raps_timer_watcher, ring_timer_watcher;
+tick_t last_raps_frame=0;
+
 void usage() {
 	fprintf(stdout, "usage: ./erps [-o rpl_port | -n rpl_port] port0 port0 node_id\n\n");
 	fprintf(stdout, " -o rpl_port	node is RPL owner node\n");
@@ -43,6 +58,7 @@ bool is_erps_frame(uint8_t *data, int len) {
 	return true;
 }
 
+#if 0
 void external_command(struct ring *ring) {
 	char cmd_buf[100];
 	char *brkt, *cmd=0, *port_name=0;
@@ -108,12 +124,7 @@ void external_command(struct ring *ring) {
 		}
 	}
 }
-
-struct port_io {
-	struct ev_io io;
-	struct ring *ring;
-	struct ring_port *port;
-};
+#endif 
 
 static void port_cb(EV_P_ struct ev_io *_ev, int revents) {
 	struct port_io *ev = (struct port_io *)_ev;
@@ -121,16 +132,17 @@ static void port_cb(EV_P_ struct ev_io *_ev, int revents) {
 	uint8_t *data;
 	int len;
 
-	D("recv event");
-
 	// receive data from active port
 	data = ring_port_recv(ev->port, &len);
-	if (!data) 
+	if (!data) {
+		E("ring_port_recv failed");
 		return;
+	}
 
 	if (is_erps_frame(data, len)) {
 		if (is_local_erps_frame(data, len, ev->ring->node_id)) {
 			// ignore frames originated with out node_id
+			//D("local frame received. ignore");
 			return;
 		}
 		
@@ -151,16 +163,50 @@ static void port_cb(EV_P_ struct ev_io *_ev, int revents) {
 	}
 }
 
-static void send_raps_cb(EV_P_ struct ev_timer *_ev, int revents) {
-	D("timeout event");
+static void ring_timer_cb(EV_P_ struct ev_timer *_ev, int revents) {
+	struct port_io *ev = (struct port_io *)_ev;
+	struct ring *ring = ev->ring;
 
-	/*
+	if (!ring) {
+		E("invalid ring");
+		return;
+	}
+	ring_timer(ring);
+}
+
+static void send_raps_cb(EV_P_ struct ev_timer *_ev, int revents) {
+	struct port_io *ev = (struct port_io *)_ev;
+	struct ring *ring = ev->ring;
+
+	if (!ring) {
+		E("invalid ring");
+		return;
+	}
+
+	if (!ring->is_sending_raps) {
+		//D("not sending raps ring=%p", ring);
+		return;
+	}
+	
+	tick_t now;
+	int delta;
+
 	// send raps frame
-	ring_send_raps(ring);
-	last_raps_frame = now;
-	if (ring->raps_bursts_remain > 0) 
+	if (ring->raps_bursts_remain > 0) {
+		//XXX: 1ms
 		ring->raps_bursts_remain--;
-	*/
+		raps_timer_watcher.timer.repeat = 0.01;
+	} else {
+		raps_timer_watcher.timer.repeat = 5.0;
+	}
+
+//	now = tick_now();
+//	delta = (ring->raps_bursts_remain > 0) ? 3 : 5000;
+
+//	if (tick_diff_msec(now, last_raps_frame) > delta) {
+	ring_send_raps(ring);
+//		last_raps_frame = tick_now(); 
+//	}
 }
 
 
@@ -255,6 +301,7 @@ int main(int argc, char **argv) {
 
 	// create ring
 	ring = ring_create(port0, port1, rpl_port, is_rpl_owner, is_rpl_neighbour, node_id);
+	D("ring_create: ring=%p", ring);
 
 	ring_io_init(ring);
 
@@ -266,18 +313,21 @@ int main(int argc, char **argv) {
 
 	struct port_io port0_watcher = { .ring=ring, .port=port0 };
 	struct port_io port1_watcher = { .ring=ring, .port=port1 };
-	struct ev_timer raps_timer_watcher;
-
 	struct ev_loop *loop = ev_default_loop (0);
+
+	raps_timer_watcher.ring = ring;
+	ring_timer_watcher.ring = ring;
 
 	ev_io_init((struct ev_io*)&port0_watcher, port_cb, port0_fd, EV_READ);
 	ev_io_init((struct ev_io*)&port1_watcher, port_cb, port1_fd, EV_READ);
-    ev_timer_init (&raps_timer_watcher, send_raps_cb, 1.0, 1.0);
+	ev_timer_init ((struct ev_timer*)&ring_timer_watcher, ring_timer_cb, 1.0, 1.0);
+	ev_timer_init ((struct ev_timer*)&raps_timer_watcher, send_raps_cb, 1.0, 1.0);
 
 	ev_io_start (loop, (struct ev_io*)&port0_watcher);
 	ev_io_start (loop, (struct ev_io*)&port1_watcher);
-	ev_timer_start (loop, &raps_timer_watcher);
-    ev_loop (loop, 0);
+	ev_timer_start (loop, (struct ev_timer*)&ring_timer_watcher);
+	ev_timer_start (loop, (struct ev_timer*)&raps_timer_watcher);
+	ev_loop (loop, 0);
 
 /*
 	FD_ZERO(&fds);

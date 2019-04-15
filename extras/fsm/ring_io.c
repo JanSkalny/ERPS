@@ -2,6 +2,7 @@
 
 #include "tick.h"
 #include "ring.h"
+#include "ring_port.h"
 #include "ring_io.h"
 
 struct ring_io g_ring_io;
@@ -68,33 +69,75 @@ void ring_io_destroy() {
 }
 
 void rio_client(struct ring_io *io, int sock) {
+	struct ring *ring = io->ring;
+	struct ring_port *port = 0;
+	struct ring_io_req req;
 	uint8_t buf[100];
-	int len, param;
+	int len;
 
 	len = recv(sock, buf, sizeof(uint8_t)+sizeof(int), 0);
+	if (len != 5) {
+		E("got invalid request. len=%d", len);
+		goto cleanup;
+	}
+
+	memcpy(&req, buf, 5);
+
+	if (req.param == RING_IO_PORT0)
+		port = ring->port0;
+	if (req.param == RING_IO_PORT1)
+		port = ring->port1;
+
 	if (len > 0) {
-		param = *(int*)(buf+1);
-		switch(buf[0]) {
+		switch(req.cmd) {
 		case RING_IO_CMD_STATUS:
-			D("status");
+			D("[exec] status");
+			D("RING%d\n" \
+			  "\tstate=%s\n" \
+			  "\tport0=%s%s%s%s\n" \
+			  "\tport1=%s%s%s%s\n" \
+			  "\tguard=%d wtr=%d wtb=%d\n" \
+			  "\tis_revertive=%d\n" \
+			  "\tis_rpl_owner=%d\n" \
+			  "\tis_rpl_neighbour=%d\n", \
+			  ring->ring_id, \
+			  RING_STATE_STR[ring->state], \
+			  ring->port0->name, ring->port0->is_blocked ? ",blocked" : "", ring->port0->is_failed ? ",failed" : "", \
+			  ring->port0 == ring->rpl_port ? ",rpl" : "", \
+			  ring->port1->name, ring->port1->is_blocked ? ",blocked" : "", ring->port1->is_failed ? ",failed" : "", \
+			  ring->port1 == ring->rpl_port ? ",rpl" : "", \
+			  ring->guard_timer_active, ring->wtr_timer_active, ring->wtb_timer_active, \
+			  ring->is_revertive, \
+			  ring->is_rpl_owner, \
+			  ring->is_rpl_neighbour);
+
 			break;
 		case RING_IO_CMD_CLEAR:
-			D("clear");
+			D("[cmd] clear");
+			ring_process_request(ring, RING_REQ_CLEAR, 0, 0);
 			break;
 		case RING_IO_CMD_MS:
-			D("ms %d", param);
+			D("[cmd] ms %s", port->name);
+			ring_process_request(ring, RING_REQ_MS, port, 0);
 			break;
 		case RING_IO_CMD_FS:
-			D("fs %d", param);
+			D("[cmd] fs %s", port->name);
+			ring_process_request(ring, RING_REQ_FS, port, 0);
 			break;
 		case RING_IO_CMD_FAIL:
-			D("fail %d", param);
+			D("[cmd] fail %s", port->name);
+			port->is_failed = true;
+			ring_process_request(ring, RING_REQ_SF, port, 0);
 			break;
 		case RING_IO_CMD_RECOVER:
-			D("recovert %d", param);
+			D("[cmd] recover %s", port->name);
+			port->is_failed = false;
+			ring_process_request(ring, RING_REQ_CLEAR_SF, port, 0);
 			break;
 		}
 	}
+
+cleanup:
 
 	close(sock);
 	FD_CLR(sock, &io->fds);

@@ -25,7 +25,15 @@
 #include <pthread.h>
 #include <ev.h>
 
-#define E
+#define E(format, ...) \
+	do { \
+		struct timeval __xxts; \
+		gettimeofday(&__xxts, 0); \
+		fprintf(stderr, "%03d.%06d %s+%-4d [ERR] %*s" format "\n", \
+			(int)__xxts.tv_sec % 1000, (int)__xxts.tv_usec, \
+			__FUNCTION__, __LINE__, (int)(strlen(__FUNCTION__) > 25 ? 1 : 25-strlen(__FUNCTION__)), " ", ##__VA_ARGS__); \
+	} while (0);
+
 #define D(format, ...) \
 	do { \
 		struct timeval __xxts; \

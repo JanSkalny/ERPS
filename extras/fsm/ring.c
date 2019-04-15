@@ -5,6 +5,9 @@
 #include "ring_port.h"
 #include "ring.h"
 
+//XXX: should be 300
+#define WTR_TIMER 15
+
 const char *RING_STATE_STR[6] = { 
 	"INIT",
 	"IDLE",
@@ -46,17 +49,23 @@ const char * ring_req_str(enum ring_request req) {
 // Ring FSM action
 // ------------------------------------------
 
-void start_wtr_timer() {
+void start_wtr_timer(struct ring *ring) {
 	D(" - start WTR timer");
+	ring->wtr_timer_active_since = tick_now();
+	ring->wtr_timer_active = true;
 }
-void stop_wtr_timer() {
+void stop_wtr_timer(struct ring *ring) {
 	D(" - stop WTR timer");
+	ring->wtr_timer_active = false;
 }
-void start_wtb_timer() {
+void start_wtb_timer(struct ring *ring) {
 	D(" - start WTB timer");
+	ring->wtb_timer_active_since = tick_now();
+	ring->wtb_timer_active = true;
 }
-void stop_wtb_timer() {
+void stop_wtb_timer(struct ring *ring) {
 	D(" - stop WTB timer");
+	ring->wtb_timer_active = false;
 }
 void start_guard_timer(struct ring *ring) {
 	D(" - start guard timer");
@@ -112,6 +121,8 @@ void start_tx(struct ring *r, enum raps_request request, uint8_t flags) {
 	}
 
 	r->is_sending_raps = true;
+
+	D("start_tx: ring=%p", r);
 }
 
 void stop_tx(struct ring *r) {
@@ -119,6 +130,7 @@ void stop_tx(struct ring *r) {
 
 	// stop sending R-APS, as requested
 	r->is_sending_raps = false;
+	D("stop_tx: ring=%p", r);
 }
 
 
@@ -160,7 +172,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 	}
 
 	if (dupe) {
-		//D("FSM: same request ignored");
+		D("FSM: same request ignored");
 		return;
 	}
 
@@ -174,14 +186,14 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 	case RING_STATE_INIT:
 		D("FSM: execute row 01");
 		stop_guard_timer(r);
-		stop_wtr_timer();
-		stop_wtb_timer();
+		stop_wtr_timer(r);
+		stop_wtb_timer(r);
 		if (r->is_rpl_owner) {
 			block_port(r->rpl_port);
 			unblock_port(ring_other_port(r, r->rpl_port));	
 			start_tx(r, RAPS_REQ_NR, 0);
 			if (r->is_revertive) 
-				start_wtr_timer();
+				start_wtr_timer(r);
 		} else if (r->is_rpl_neighbour) {
 			block_port(r->rpl_port);
 			unblock_port(ring_other_port(r, r->rpl_port));
@@ -362,7 +374,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 			start_guard_timer(r);
 			start_tx(r, RAPS_REQ_NR, 0);
 			if (r->is_rpl_owner && r->is_revertive)
-				start_wtr_timer();
+				start_wtr_timer(r);
 			new_state = RING_STATE_PENDING;
 			break;
 
@@ -405,7 +417,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 			// FIXME:
 			D("FSM: execute row 29");
 			if (r->is_rpl_owner && r->is_revertive)
-				start_wtr_timer();
+				start_wtr_timer(r);
 			new_state = RING_STATE_PENDING; 
 			break;
 		}
@@ -421,7 +433,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 				start_guard_timer(r);
 				start_tx(r, RAPS_REQ_NR, 0);
 				if (r->is_rpl_owner && r->is_revertive)
-					start_wtb_timer();
+					start_wtb_timer(r);
 			}
 			new_state = RING_STATE_PENDING;
 			break;
@@ -480,7 +492,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 				start_guard_timer(r);
 				start_tx(r, RAPS_REQ_NR, 0);
 				if (r->is_rpl_owner && r->is_revertive)
-					start_wtb_timer();
+					start_wtb_timer(r);
 				new_state = RING_STATE_PENDING;
 			} else {
 				new_state = RING_STATE_MANUAL_SWITCH;
@@ -516,7 +528,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 		case RING_REQ_RAPS_NR:
 			D("FSM: execute row 43");
 			if (r->is_rpl_owner && r->is_revertive)
-				start_wtb_timer();
+				start_wtb_timer(r);
 			new_state = RING_STATE_PENDING;
 			break;
 		}
@@ -532,7 +544,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 				start_guard_timer(r);
 				start_tx(r, RAPS_REQ_NR, 0);
 				if (r->is_rpl_owner && r->is_revertive)
-					start_wtb_timer();
+					start_wtb_timer(r);
 			}
 			new_state = RING_STATE_PENDING;
 			break;
@@ -593,7 +605,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 		case RING_REQ_RAPS_NR:
 			D("FSM: execute row 57");
 			if (r->is_rpl_owner && r->is_revertive)
-				start_wtb_timer();
+				start_wtb_timer(r);
 			new_state = RING_STATE_PENDING;
 			break;
 		}
@@ -607,8 +619,8 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 			D("FSM: execute row 58");
 			if (r->is_rpl_owner) {
 				//XXX: wrong indentaion in FSM
-				stop_wtr_timer();
-				stop_wtb_timer();
+				stop_wtr_timer(r);
+				stop_wtb_timer(r);
 				if (is_port_blocked(r->rpl_port)) {
 					start_tx(r, RAPS_REQ_NR, RAPS_FLAG_RB|RAPS_FLAG_DNF);
 					unblock_port(ring_other_port(r, r->rpl_port));
@@ -634,8 +646,8 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 				flush_fdb();
 			}
 			if (r->is_rpl_owner) {
-				stop_wtr_timer();
-				stop_wtb_timer();
+				stop_wtr_timer(r);
+				stop_wtb_timer(r);
 			}
 			new_state = RING_STATE_FORCED_SWITCH;
 			break;
@@ -646,8 +658,8 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 			unblock_port(r->port1);
 			stop_tx(r);
 			if (r->is_rpl_owner) {
-				stop_wtr_timer();
-				stop_wtb_timer();
+				stop_wtr_timer(r);
+				stop_wtb_timer(r);
 			}
 			new_state = RING_STATE_FORCED_SWITCH;
 			break;
@@ -664,8 +676,8 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 				flush_fdb();
 			}
 			if (r->is_rpl_owner) {
-				stop_wtr_timer();
-				stop_wtb_timer();
+				stop_wtr_timer(r);
+				stop_wtb_timer(r);
 			}
 			new_state = RING_STATE_PROTECTION;
 			break;
@@ -679,8 +691,8 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 			unblock_nonfailed_ports(r);
 			stop_tx(r);
 			if (r->is_rpl_owner) {
-				stop_wtr_timer();
-				stop_wtb_timer();
+				stop_wtr_timer(r);
+				stop_wtb_timer(r);
 			}
 			new_state = RING_STATE_PROTECTION;
 			break;
@@ -690,8 +702,8 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 			unblock_nonfailed_ports(r);
 			stop_tx(r);
 			if (r->is_rpl_owner) {
-				stop_wtr_timer();
-				stop_wtb_timer();
+				stop_wtr_timer(r);
+				stop_wtb_timer(r);
 			}
 			new_state = RING_STATE_MANUAL_SWITCH;
 			break;
@@ -699,8 +711,8 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 		case RING_REQ_MS:
 			D("FSM: execute row 65");
 			if (r->is_rpl_owner) {
-				stop_wtr_timer();
-				stop_wtb_timer();
+				stop_wtr_timer(r);
+				stop_wtb_timer(r);
 			}
 			if (is_port_blocked(port)) {
 				start_tx(r, RAPS_REQ_MS, RAPS_FLAG_DNF);
@@ -717,7 +729,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 		case RING_REQ_WTR_EXPIRES:
 			D("FSM: execute row 66");
 			if (r->is_rpl_owner) {
-				stop_wtb_timer();
+				stop_wtb_timer(r);
 				if (is_port_blocked(r->rpl_port)) {
 					start_tx(r, RAPS_REQ_NR, RAPS_FLAG_DNF|RAPS_FLAG_RB);
 					unblock_port(ring_other_port(r, r->rpl_port));
@@ -738,7 +750,7 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 		case RING_REQ_WTB_EXPIRES:
 			D("FSM: execute row 68");
 			if (r->is_rpl_owner) {
-				stop_wtr_timer();
+				stop_wtr_timer(r);
 				if (is_port_blocked(r->rpl_port)) {
 					start_tx(r, RAPS_REQ_NR, RAPS_FLAG_RB|RAPS_FLAG_DNF);
 					unblock_port(ring_other_port(r, r->rpl_port));
@@ -759,8 +771,8 @@ void ring_fsm(struct ring *r, enum ring_request req, struct ring_port *port, uin
 		case RING_REQ_RAPS_NR_RB:
 			D("FSM: execute row 70");
 			if (r->is_rpl_owner) {
-				stop_wtr_timer();
-				stop_wtb_timer();
+				stop_wtr_timer(r);
+				stop_wtb_timer(r);
 			}
 			if (!r->is_rpl_owner && !r->is_rpl_neighbour) {
 				unblock_port(r->port0);
@@ -799,11 +811,11 @@ struct ring *ring_create(struct ring_port *port0, struct ring_port *port1, struc
 	//XXX: 
 	// request enumeration
 	enum ring_request req;
+	D("== START VALID RING REQUESTS ==");
 	for (req=RING_REQ_INVALID; req<=RING_REQ_CLEAR; req++) {
 		D("request %02xh %s", req, ring_req_str(req));
 	}
-
-
+	D("== END VALID RING REQUESTS ==");
 
 	ret = malloc(sizeof(struct ring));
 	if (!ret)
@@ -812,6 +824,7 @@ struct ring *ring_create(struct ring_port *port0, struct ring_port *port1, struc
 
 	// initialize 
 	ret->ring_id = 1;
+	ret->is_revertive = 1;
 	ret->raps_vid = 4093;
 	ret->port0 = port0;
 	ret->port1 = port1;
@@ -935,6 +948,11 @@ void ring_process_request(struct ring *r, enum ring_request request, struct ring
 		}
 	}
 
+	// local clear SF signal, if nothing is failed
+	//TODO: check port state!
+	if (r->local_request == RING_REQ_SF && request == RING_REQ_CLEAR_SF) 
+		r->local_request = RING_REQ_INVALID;
+
 	// local request is overriden by other request?
 	if (request > r->local_request) {
 		// clear (overidden) local request
@@ -945,6 +963,7 @@ void ring_process_request(struct ring *r, enum ring_request request, struct ring
 		case RING_REQ_SF:
 		case RING_REQ_FS:
 		case RING_REQ_MS:
+			D("local_request %s -> %s", ring_req_str(r->local_request), ring_req_str(request));
 			r->local_request = request;
 			break;
 		default:
@@ -963,6 +982,17 @@ void ring_process_request(struct ring *r, enum ring_request request, struct ring
 }
 
 
+void ring_timer(struct ring *ring) {
+	// WTR timer
+	if (ring->wtr_timer_active) {
+		if (tick_diff_msec(tick_now(), ring->wtr_timer_active_since) >= WTR_TIMER * 1000) {
+			// WTR expired
+			D("[local] WTR expired");
+			ring_fsm(ring, RING_REQ_WTR_EXPIRES, 0, 0);
+			ring->wtr_timer_active = 0;
+		}
+	}
+}
 
 void ring_process_raps(struct ring *ring, uint8_t *data, int len, struct ring_port *origin) {
 	struct ri_raps *raps;
@@ -982,16 +1012,17 @@ void ring_process_raps(struct ring *ring, uint8_t *data, int len, struct ring_po
 	}
 
 	raps = ri_raps_create();
-	ri_raps_parse(raps, data, len);
+	if (!ri_raps_parse(raps, data, len)) {
+		D("ignored invalid R-APS");
+		return;
+	}
 
-	/*
 	D("recvd R-APS(%s%s%s) from " MACSTR " on %s -- flags=%02xh", \
 		RAPS_REQUEST_STR[raps->request], \
 		raps->flags&RAPS_FLAG_DNF ? ",DNF" : "", \
 		raps->flags&RAPS_FLAG_RB ? ",RB" : "", \
 		MAC2STR(raps->node_id), \
 		origin->name, raps->flags);
-	*/
 
 	switch (raps->request) {
 	case RAPS_REQ_NR: request = raps->flags&RAPS_FLAG_RB ? RING_REQ_RAPS_NR_RB : RING_REQ_RAPS_NR; break;

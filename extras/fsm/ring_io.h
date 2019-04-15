@@ -13,6 +13,11 @@
 #define RING_IO_SOCKET "/tmp/ring.sock"
 #define RING_IO_MAX_MSG_SIZE 100
 
+struct ring_io_req {
+	uint8_t cmd;
+	int param;
+};
+
 struct ring_io_status {
 	int ring_id;
 	int status;

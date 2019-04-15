@@ -29,6 +29,7 @@ void* ring_io_send_msg(uint8_t code, int arg) {
 	int s, len;
 	struct sockaddr_un addr;
 	uint8_t buf[RING_IO_MAX_MSG_SIZE];
+	struct ring_io_req req;
 
 	// connect to ringd socket
 	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
@@ -44,11 +45,12 @@ void* ring_io_send_msg(uint8_t code, int arg) {
 		exit(1);
 	}
 
+	req.cmd = code;
+	req.param = arg;
+
 	// write message
 	D("send 1");
-	send(s, &code, sizeof(code), 0);
-	D("send 2");
-	send(s, &arg, sizeof(arg), 0);
+	send(s, &req, sizeof(req), 0);
 
 	// read reply
 	D("recv 1");
