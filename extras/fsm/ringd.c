@@ -35,10 +35,17 @@ void exit_usage() {
 }
 
 bool is_local_erps_frame(uint8_t *data, int len, uint8_t *node_id) {
+	uint16_t eth_type;
+	int offset = 0;
+
 	if (len < 55)
 		return false;
 
-	if (memcmp(data+14+4+6, node_id, 6) != 0)
+	eth_type = READ_WORD(data+12);
+	if (eth_type == 0x8100)
+		offset += 4;
+
+	if (memcmp(data+14+offset+6, node_id, 6) != 0)
 		return false;
 
 	return true;
