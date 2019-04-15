@@ -1,0 +1,10 @@
+- hosts: bsd
+  gather_facts: no
+  tasks:
+  - raw: pkg install -y python
+
+- hosts: linux
+  gather_facts: no
+  tasks:
+  - raw: apt-get install -y python-apt
+

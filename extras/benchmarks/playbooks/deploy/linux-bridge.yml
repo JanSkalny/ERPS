@@ -1,0 +1,26 @@
+- hosts: sw-linux
+  tasks:
+  - name: "reboot host"
+    shell: "sleep 5 && reboot"
+    async: 1
+    poll: 0
+  - name: "wait for host"
+    wait_for_connection:
+      connect_timeout: 20
+      sleep: 5
+      delay: 5
+      timeout: 300
+  - name: "reconfigure networking: linux bridge"
+    shell: |
+        sleep 5
+        brctl addbr br0
+        brctl stp br0 off
+        ip link set br0 up
+        for P in enp0s20f2 enp0s20f3; do
+            brctl addif br0 $P
+            ip link set $P up
+            ethtool -A  $P tx off rx off autoneg off
+            ethtool -a $P
+        done
+
+

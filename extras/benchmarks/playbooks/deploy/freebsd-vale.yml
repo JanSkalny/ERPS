@@ -1,0 +1,25 @@
+- hosts: sw-bsd
+  tasks:
+  - name: "reboot host"
+    shell: "sleep 5 && shutdown -r now"
+    async: 1
+    poll: 0
+  - name: "wait for host"
+    wait_for_connection:
+      connect_timeout: 20
+      sleep: 5
+      delay: 5
+      timeout: 300
+  - name: "make sure vale-ctl is present"
+    make:
+      chdir: /usr/src/tools/tools/netmap
+      target: vale-ctl
+  - name: "reconfigure networking: freebsd vale"
+    shell: |
+        sleep 5
+
+        ifconfig igb2 up
+        ifconfig igb3 up
+        /usr/obj/usr/src/amd64.amd64/tools/tools/netmap/vale-ctl  -h vale0:igb2
+        /usr/obj/usr/src/amd64.amd64/tools/tools/netmap/vale-ctl  -h vale0:igb3
+

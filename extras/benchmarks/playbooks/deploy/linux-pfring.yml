@@ -1,0 +1,39 @@
+- hosts: sw-linux
+  tasks:
+  - name: "reboot host"
+    shell: "sleep 5 && reboot"
+    async: 1
+    poll: 0
+  - name: "wait for host"
+    wait_for_connection:
+      connect_timeout: 20
+      sleep: 5
+      delay: 5
+      timeout: 300
+
+  - name: download source code
+    git:
+      repo: "https://github.com/ntop/PF_RING.git"
+      dest: "/root/PF_RING-7.4.0"
+      version: "7.4.0"
+
+  - name: build kernel module
+    make:
+      chdir: /root/PF_RING-7.4.0/kernel
+
+  - name: build userland example apps
+    make:
+      chdir: /root/PF_RING-7.4.0/userland/examples
+
+  - name: load kernel module
+    modprobe: 
+      name: /root/PF_RING-7.4.0/kernel/pfring.ko
+      state: present
+
+  - name: "reconfigure networking: linux pf_ring"
+    shell: |
+        sleep 5
+        ifconfig enp0s20f2 up
+        ifconfig enp0s20f3 up
+        /root/PF_RING-7.4.0/userland/examples/pfbridge -a enp0s20f2 -b enp0s20f3
+

@@ -1,0 +1,23 @@
+- hosts: sw-linux
+  tasks:
+  - name: "reboot host"
+    shell: "sleep 5 && reboot"
+    async: 1
+    poll: 0
+  - name: "wait for host"
+    wait_for_connection:
+      connect_timeout: 20
+      sleep: 5
+      delay: 5
+      timeout: 300
+  - name: install upstream openvswitch
+    package:
+      name: openvswitch-switch
+  - name: "reconfigure networking: linux ovs"
+    shell: |
+        sleep 5
+        ip link set enp0s20f2 up
+        ip link set enp0s20f3 up
+        ovs-vsctl add-br br-test
+        ovs-vsctl add-port br-test enp0s20f2
+        ovs-vsctl add-port br-test enp0s20f3

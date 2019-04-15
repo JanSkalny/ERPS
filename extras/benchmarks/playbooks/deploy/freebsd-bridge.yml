@@ -1,0 +1,19 @@
+- hosts: sw-bsd
+  tasks:
+  - name: "reboot host"
+    shell: "sleep 5 && shutdown -r now"
+    async: 1
+    poll: 0
+  - name: "wait for host"
+    wait_for_connection:
+      connect_timeout: 20
+      sleep: 5
+      delay: 5
+      timeout: 300
+  - name: "reconfigure networking: freebsd bridge"
+    shell: |
+        sleep 5
+        ifconfig igb2 up
+        ifconfig igb3 up
+        ifconfig bridge create
+        ifconfig bridge0 addm igb2 addm igb3 up
