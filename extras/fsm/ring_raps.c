@@ -35,6 +35,7 @@ int ri_raps_get_len(struct ri_raps *frame) {
  */
 bool ri_raps_parse(struct ri_raps *frame, uint8_t *data, int len) {
 	uint8_t *p, request, subcode, flags, version, ring_id, cfm_op_code;
+	uint16_t eth_type;
 
 	assert (data && frame);
 
@@ -51,7 +52,15 @@ bool ri_raps_parse(struct ri_raps *frame, uint8_t *data, int len) {
 
 	// -- Ethernet2 header --
 	ring_id = READ_BYTE(data+5);
-	data += 14+4;
+	eth_type = READ_WORD(data+12);
+	data += 14;
+
+	// -- dot1q header (might be missing)
+	if (eth_type == 0x8100) {
+		READ_WORD(data+2);
+		data += 4;
+	}
+	E("R-APS eth_type is %04x", eth_type);
 	
 	// -- CFM header --
 	version = READ_BYTE(data) & 0x1f;
