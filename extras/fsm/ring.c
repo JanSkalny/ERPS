@@ -988,7 +988,7 @@ void ring_timer(struct ring *ring) {
 		if (tick_diff_msec(tick_now(), ring->wtr_timer_active_since) >= WTR_TIMER * 1000) {
 			// WTR expired
 			D("[local] WTR expired");
-			ring_fsm(ring, RING_REQ_WTR_EXPIRES, 0, 0);
+			ring_process_request(ring, RING_REQ_WTR_EXPIRES, 0, 0);
 			ring->wtr_timer_active = 0;
 		}
 	}
