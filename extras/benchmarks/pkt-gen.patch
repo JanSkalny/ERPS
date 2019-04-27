@@ -1,0 +1,214 @@
+--- a/tools/tools/netmap/pkt-gen.c
++++ b/tools/tools/netmap/pkt-gen.c
+@@ -42,6 +42,7 @@
+ #define NETMAP_WITH_LIBS
+ #include <net/netmap_user.h>
+
++#define BUSYWAIT
+
+ #include <ctype.h>     // isprint()
+ #include <unistd.h>    // sysconf()
+@@ -1289,20 +1290,42 @@ ping_body(void *data)
+        struct timespec ts, now, last_print;
+        struct timespec nexttime = {0, 0}; /* silence compiler */
+        uint64_t sent = 0, n = targ->g->npackets;
+-       uint64_t count = 0, t_cur, t_min = ~0, av = 0;
+-       uint64_t g_min = ~0, g_av = 0;
++       uint64_t count = 0, t_cur, t_min = ~0, t_max = 0, av = 0;
++       uint64_t g_min = ~0, g_max = 0;
++       double g_mean = 0.0, g_stddev = 0.0;
+        uint64_t buckets[64];   /* bins for delays, ns */
+        int rate_limit = targ->g->tx_rate, tosend = 0;
+
++       uint64_t *delays = NULL;
++       int max_delays = (int)((rate_limit+10)*1.1);
++       int delays_pos=0;
++
++       uint64_t *g_delays = NULL;
++       int max_g_delays = (int)((n+10)*1.1);
++       int g_delays_pos=0;
++
++       delays = malloc(sizeof(uint64_t)*max_delays);
++       if (!delays) {
++               D("failed to allocate delays buffer");
++               return NULL;
++       }
++
++       if (n && n < 1000000) {
++               g_delays = malloc(sizeof(uint64_t)*max_g_delays);
++               if (!delays)
++                       D("failed to allocate g_delays buffer");
++       }
++
+        frame = (char*)&targ->pkt + sizeof(targ->pkt.vh) - targ->g->virt_header;
+        size = targ->g->pkt_size + targ->g->virt_header;
+
+-
+        if (targ->g->nthreads > 1) {
+                D("can only ping with 1 thread");
+                return NULL;
+        }
+
++       D("trying to send %d packets per second", rate_limit);
++
+        bzero(&buckets, sizeof(buckets));
+        clock_gettime(CLOCK_REALTIME_PRECISE, &last_print);
+        now = last_print;
+@@ -1342,6 +1365,7 @@ ping_body(void *data)
+                                clock_gettime(CLOCK_REALTIME_PRECISE, &ts);
+                                bcopy(&sent, p+42, sizeof(sent));
+                                tp = (struct tstamp *)(p+46);
++                               //D("send seq=%d ts=%d.%d", (int)sent, (int)ts.tv_sec, (int)ts.tv_nsec);
+                                tp->sec = (uint32_t)ts.tv_sec;
+                                tp->nsec = (uint32_t)ts.tv_nsec;
+                                sent++;
+@@ -1387,6 +1411,7 @@ ping_body(void *data)
+                                clock_gettime(CLOCK_REALTIME_PRECISE, &now);
+                                bcopy(p+42, &seq, sizeof(seq));
+                                tp = (struct tstamp *)(p+46);
++                               //D("recv now=%d.%d got=%d.%d", (int)now.tv_sec, (int)now.tv_nsec, tp->sec, tp->nsec);
+                                ts.tv_sec = (time_t)tp->sec;
+                                ts.tv_nsec = (long)tp->nsec;
+                                ts.tv_sec = now.tv_sec - ts.tv_sec;
+@@ -1395,12 +1420,24 @@ ping_body(void *data)
+                                        ts.tv_nsec += 1000000000;
+                                        ts.tv_sec--;
+                                }
+-                               if (0) D("seq %d/%llu delta %d.%09d", seq,
+-                                       (unsigned long long)sent,
+-                                       (int)ts.tv_sec, (int)ts.tv_nsec);
+                                t_cur = ts.tv_sec * 1000000000UL + ts.tv_nsec;
++
++
++                               // record global delay statistics
++                               if (g_delays) {
++                                       if (g_delays_pos < max_g_delays)
++                                               g_delays[g_delays_pos++] = t_cur;
++                               } else if(0) {
++                                       D("seq %d/%llu delta %lu", seq,
++                                               (unsigned long long)sent, t_cur);
++                               }
++
++                               if (delays_pos < max_delays)
++                                       delays[delays_pos++] = t_cur;
+                                if (t_cur < t_min)
+                                        t_min = t_cur;
++                               if (t_cur > t_max)
++                                       t_max = t_cur;
+                                count ++;
+                                av += t_cur;
+                                pos = msb64(t_cur);
+@@ -1419,11 +1456,31 @@ ping_body(void *data)
+                        ts.tv_sec--;
+                }
+                if (ts.tv_sec >= 1) {
+-                       D("count %d RTT: min %d av %d ns",
+-                               (int)count, (int)t_min, (int)(av/count));
++                       // statistics within the sample (delays)
++                       int i;
++                       double t_stddev = 0.0, t_mean = av/count;
++                       for (i=0; i!=delays_pos; i++)
++                               t_stddev += pow(delays[i] - t_mean, 2);
++
++                       if (delays_pos <= 1) {
++                               t_stddev = 0.0;
++                       } else {
++                               t_stddev /= (delays_pos-1);
++                               t_stddev = sqrt(t_stddev);
++                       }
++
++                       if ((int)count != delays_pos)
++                               D("ERROR: count!=delays_pos)");
++
++                       D("count %d RTT: min/avg/max/stddev %d/%d/%d/%f ns",
++                               (int)count, (int)t_min, (int)t_mean, (int)t_max, t_stddev);
++
++                       delays_pos=0;
++
++                       // quartiles and distribution
++/*
+                        int k, j, kmin, off;
+                        char buf[512];
+-
+                        for (kmin = 0; kmin < 64; kmin ++)
+                                if (buckets[kmin])
+                                        break;
+@@ -1437,12 +1494,39 @@ ping_body(void *data)
+                        }
+                        D("k: %d .. %d\n\t%s", 1<<kmin, 1<<k, buf);
+                        bzero(&buckets, sizeof(buckets));
+-                       count = 0;
+-                       g_av += av;
+-                       av = 0;
++*/
++                       // global minimum and maximum
++                       if (t_max > g_max)
++                               g_max = t_max;
+                        if (t_min < g_min)
+                                g_min = t_min;
++
++                       // update "rolling" stddev
++                       // ((n1-1)*s1^2 + (n2-1)*s2^2 + (n2*n1/(n2+n1))*(m1^2+m2^2-2*m1*m2)) / (n1+n2-1)
++                       // http://atozmath.com/example/CONM/Ch2_CombinedSD.aspx?he=e
++                       if (sent > 1) {
++                               g_stddev = sqrt((
++                                       (double)((sent-count)-1)*pow(g_stddev,2) +
++                                       (double)((count)-1)*pow(t_stddev,2) +
++                                       ((double)(sent-count)*count/sent)* \
++                                       (pow(g_mean,2)+pow(t_mean,2)-2*g_mean*t_mean) ) /
++                                       (sent-1));
++                       }
++
++                       // update "rolling" mean
++                       // (n1*m1+n2*m2)/(n1+n2)
++                       if (sent > 0) {
++                               g_mean = (g_mean*(sent-count) + t_mean*count) / sent;
++                       }
++
++                       D("count %d RTT_total: min/avg/max/stddev %d/%d/%d/%f ns",
++                               (int)sent, (int)g_min, (int)g_mean, (int)g_max, g_stddev);
++
++
++                       count = 0;
++                       av = 0;
+                        t_min = ~0;
++                       t_max = 0;
+                        last_print = now;
+                }
+ #ifdef BUSYWAIT
+@@ -1451,16 +1535,33 @@ ping_body(void *data)
+ #endif /* BUSYWAIT */
+        }
+
++#if 0
++//XXX: following values are invalid!
++// we would need to process delatas from last sample (t_... values)
+        if (sent > 0) {
+-               D("RTT over %llu packets: min %d av %d ns",
+-                       (long long unsigned)sent, (int)g_min,
+-                       (int)((double)g_av/sent));
++               D("RTT over %llu packets: min/av/max/stddev %d/%d/%d/%f ns",
++                       (long long unsigned)sent, (int)g_min,
++                       (int)g_mean, (int)g_max, g_stddev);
+        }
++#endif
+        targ->completed = 1;
+
+        /* reset the ``used`` flag. */
+        targ->used = 0;
+
++       if (delays) {
++               free(delays);
++               delays = NULL;
++       }
++       if (g_delays) {
++#if 1
++               for (i=0; i!=g_delays_pos; i++) {
++                       D("seq %d rtt %lu", i, g_delays[i]);
++               }
++#endif
++               free(g_delays);
++               g_delays = NULL;
++       }
+        return NULL;
+ }

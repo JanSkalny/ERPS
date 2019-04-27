@@ -53,12 +53,13 @@ for TEST in `ls measurements`; do
 				else
 					stddev = -1;
 
-				printf("'$TEST'\t'$DIR'\t'$LEN'\t%d\t%d\t%d\t%d\t%.2f\n", 
+				printf("'$TEST'\t'$DIR'\t'$LEN'\t%d\t%d\t%d\t%d\t%.2f\t%d\n", 
 					min,
 					cnt ? total/cnt : 0, 
 					max,
 					stddev,
-					(cnt+ign) ? ign/(cnt+ign) : 1.0);
+					(cnt+ign) ? ign/(cnt+ign) : 1.0,
+					cnt);
 
 			}'
 		done

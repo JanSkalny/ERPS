@@ -13,6 +13,7 @@
   - name: "reconfigure networking: linux bridge"
     shell: |
         sleep 5
+        sysctl net.ipv6.conf.all.disable_ipv6=1
         brctl addbr br0
         brctl stp br0 off
         ip link set br0 up

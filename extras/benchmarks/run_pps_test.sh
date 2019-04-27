@@ -54,7 +54,7 @@ function run_test {
 }
 
 if [ $# -eq 0 ]; then
-	echo "usage: ./run_test.sh TEST_NAME (LEN)" 1>&2
+	echo "usage: ./run_pps_test.sh TEST_NAME (LEN)" 1>&2
 	exit 1
 fi
 

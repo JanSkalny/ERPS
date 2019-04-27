@@ -118,8 +118,8 @@ int main(int argc, char **argv) {
 	FD_SET(port2->fd, &fds_orig);
 	
 	while (1) {
-		timeout.tv_sec = 1;
-		timeout.tv_usec = 0;
+		timeout.tv_sec = 0;
+		timeout.tv_usec = 100;
 		FD_COPY(&fds_orig, &fds);
 
 		ret = select(fd_max+1, &fds, 0, 0, &timeout);
