@@ -1,5 +1,0 @@
-[linux]
-sw-linux
-
-[bsd]
-sw-bsd ansible_python_interpreter=/usr/local/bin/python

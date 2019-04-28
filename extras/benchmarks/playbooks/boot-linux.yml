@@ -1,6 +1,0 @@
-- hosts: sw-linux
-  tasks:
-  - name: deploy grub.conf (linux first)
-    shell: |
-        grub-set-default 0
-        update-grub
