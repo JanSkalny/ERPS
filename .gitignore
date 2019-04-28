@@ -30,3 +30,7 @@
 
 # Debug files
 *.dSYM/
+
+# macos & vim
+.DS_Store
+*.sw*
