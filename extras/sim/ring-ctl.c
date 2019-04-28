@@ -9,7 +9,7 @@
 #include "ring.h"
 
 void usage() {
-	fprintf(stderr, "usage: ./ringctl command [port]\n\n");
+	fprintf(stderr, "usage: ./ring-ctl command [port]\n\n");
 	fprintf(stderr, "valid commands are:\n");
 	fprintf(stderr, "  status        show current ring state\n");
 	fprintf(stderr, "  clear         remote active MS/FS command or block RPL on owner\n");
