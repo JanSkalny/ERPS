@@ -855,10 +855,13 @@ struct er_ring *er_ring_create(uint16_t ring_id, char *port0_name, char *port1_n
 	ret->raps_vid = 4093;
 	ret->raps = 0;
 
+	// netmap stuff
+	//XXX: should move this to er_netmap
+	snprintf(ret->vale_name, sizeof(ret->vale_name)-1, "valeERPS%d:", ring_id);
+
 #ifdef FBSD12
 	ret->vale_auth_token = NULL;
 #endif
-	snprintf(ret->vale_name, sizeof(ret->vale_name)-1, "valeERPS%d:", ring_id);
 
 #ifdef FBSD12
 	int err;
@@ -870,8 +873,6 @@ struct er_ring *er_ring_create(uint16_t ring_id, char *port0_name, char *port1_n
 		E("failed to create vale bridge: err=%d", err);
 		goto cleanup;
 	}
-
-
 #endif
 
 	ret->port0 = er_port_create(ret, port0_name);
@@ -897,6 +898,33 @@ struct er_ring *er_ring_create(uint16_t ring_id, char *port0_name, char *port1_n
 		ret->is_rpl_neighbour = 1;
 		ret->rpl_port = rpl_neighbour == ERPS_RPL_PORT0 ? ret->port0 : ret->port1;
 	}
+
+	// nested raps structure and frame data
+	ret->raps = er_raps_create();
+	ret->raps->vid = ret->raps_vid;
+	ret->raps->ring_id = ret->id;
+	ret->raps->node_id = ret->node_id;
+	ret->raps->subcode = 0;
+	ret->raps->flags = 0xff;
+
+	// allocate frame buffer for outgoing R-APS messages
+	ret->raps_frame_len = er_raps_get_len(ret->raps);
+	ret->raps_frame = er_malloc(ret->raps_frame_len);
+	if (!ret->raps_frame) {
+		E("failed to create raps frame");
+		goto cleanup;
+	}
+
+	D("preparing fsm...");
+
+	// prepare FSM 
+	ret->local_request = RING_REQ_INVALID;
+	ret->prev_request_port = 0;
+	ret->prev_request = RING_REQ_INVALID;
+	memset(ret->prev_request_remote_node_id, 0, 6);
+
+	// trigger event to get out of INIT state of our FSM
+	ring_fsm(ret, RING_REQ_INVALID, 0, 0);
 
 	return ret;
 
@@ -1074,6 +1102,8 @@ void ring_timer(struct er_ring *ring) {
 void process_raps_frame(struct er_ring *ring, uint8_t *data, int len, struct er_port *origin) {
 	struct er_raps *raps;
 	enum ring_request request;
+
+	D("processing frame!");
 
 	// guard timer
 	if (ring->guard_timer_active) {

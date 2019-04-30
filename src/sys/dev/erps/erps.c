@@ -117,15 +117,13 @@ static int er_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struc
 			ring->wtr_time = 5*60000;
 		ring->wtb_time = ring->guard_time + 5000;
 		ring->is_revertive = req->er_revertive;
-		
-/*
+
 		// start ERPS
-		if (!ring_activate_ring(ring)) {
+		if (!er_activate_ring(ring)) {
+			E("failed to activate ring!");
 			//XXX: cleanup
 			return EINVAL;
 		}
-*/
-		break;
 
 		break;
 
