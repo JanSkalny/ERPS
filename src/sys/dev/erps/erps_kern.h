@@ -1,8 +1,3 @@
-#ifndef _ERPS_KERN_H
-#define _ERPS_KERN_H
+#pragma once
 
 #define WITH_VALE
-
-#define E D
-
-#endif
