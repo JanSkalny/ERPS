@@ -11,9 +11,13 @@
 
 int g_dev;
 
+#define VERBOSE
+
+int do_ioctl(int id, struct erreq *req);
+
 void usage() {
-	fprintf(stderr, "usage: ./erps-ctlcommand [arguments ...]\n\n");
-	fprintf(stderr, "valid commands are:\n");
+	fprintf(stderr, "usage: ./erps-ctl [-d|-h] COMMAND [arguments ...]\n\n");
+	fprintf(stderr, "valid COMMANDs are:\n");
 	fprintf(stderr, "  init [-o rpl_port | -n rpl_port] [-i node_id] port0 port1\n");
 	fprintf(stderr, "                initialize ERPS instance\n");
 	fprintf(stderr, "  status        show current ring state\n");
@@ -22,7 +26,6 @@ void usage() {
 	fprintf(stderr, "  fs port       issue Forced Switch command on specified port\n");
 	fprintf(stderr, "  fail port     simulate port failure\n");
 	fprintf(stderr, "  recover port  recover from simulated port failure\n\n");
-	fprintf(stderr, "valid ports are \"port0\" and \"port1\"\n\n");
 }
 
 void exit_usage(int code) {
@@ -37,7 +40,7 @@ void show_ring_status() {
 	bzero(&req, sizeof(req));
 	req.er_id = 1;
 
-	ret = ioctl(g_dev, ERIOCSTATUS, &req);
+	ret = do_ioctl(ERIOCSTATUS, &req);
 	if (ret) {
 		perror("ioctl failed");
 		exit(1);
@@ -59,7 +62,7 @@ void ring_command(int command, char *port) {
 	req.er_cmd = command;
 	if (port)
 		strncpy(req.er_port0, port, sizeof(req.er_port0));
-	ret = ioctl(g_dev, ERIOCCOMMAND, &req);
+	ret = do_ioctl(ERIOCCOMMAND, &req);
 	if (ret) {
 		perror("ioctl failed");
 		exit(1);
@@ -68,10 +71,11 @@ void ring_command(int command, char *port) {
 	printf("command issued\n");
 }
 
-bool init_ring(char *port0, char *port1, int argc, char *argv[]) {
+bool init_ring(int argc, char *argv[]) {
 	int ch, ret;
 	bool is_rpl_owner=false, is_rpl_neighbour=false;
 	char *rpl_port=0;
+	char *port0=0, *port1=0;
 	unsigned int mac[6], i;
 	struct erreq req;
 	uint8_t node_id[6];
@@ -106,17 +110,22 @@ bool init_ring(char *port0, char *port1, int argc, char *argv[]) {
 	argc -= optind;
 	argv += optind;
 
+	if (argc != 2) {
+		fprintf(stderr, "error: missing arguments\n");
+		usage();
+		return false;
+	}
+
+	port0 = argv[0];
+	port1 = argv[1];
+
 	bzero(&req, sizeof(req));
 
 	req.er_id = 1;
 	req.er_version = 2;
-	memcpy(req.er_node_id, "\x0\x0\x0\x0\x0\x0", 6);
+	memcpy(req.er_node_id, node_id, 6);
 	strncpy(req.er_port0, port0, IFNAMSIZ);
 	strncpy(req.er_port1, port1, IFNAMSIZ);
-
-	if (node_id) {
-		//XXX: ...
-	}
 
 	if (rpl_port) {
 		if (strcmp(rpl_port, port0) == 0) {
@@ -136,13 +145,47 @@ bool init_ring(char *port0, char *port1, int argc, char *argv[]) {
 	if (is_rpl_neighbour)
 		req.er_rpl_neighbour = 1;
 
-	ret = ioctl(g_dev, ERIOCINIT, &req);
+	ret = do_ioctl(ERIOCINIT, &req);
 	if (ret !=0 ) {
 		perror("ioctl failed");
 		return false;
 	}
 
 	return true;
+}
+
+int do_ioctl(int id, struct erreq *req) {
+	int res;
+
+#ifdef VERBOSE
+	printf("ioctl %d\n", id);
+	printf(" - port0=%s\n", req->er_port0);
+	printf(" - port1=%s\n", req->er_port1);
+	printf(" - node_id=%02x:%02x:%02x:%02x:%02x:%02x\n", \
+		req->er_node_id[0], req->er_node_id[1], \
+		req->er_node_id[2], req->er_node_id[3], \
+		req->er_node_id[4], req->er_node_id[5] );
+	printf(" - rpl_owner=%d\n", req->er_rpl_owner);
+	printf(" - rpl_neighbour=%d\n", req->er_rpl_neighbour);
+	printf(" - rpl_port_id=%d\n", req->er_rpl_port);
+#endif
+
+	res = ioctl(g_dev, id, req);
+
+#ifdef VERBOSE
+	printf("response is %d\n", res);
+	printf(" - port0=%s\n", req->er_port0);
+	printf(" - port1=%s\n", req->er_port1);
+	printf(" - node_id=%02x:%02x:%02x:%02x:%02x:%02x\n", \
+		req->er_node_id[0], req->er_node_id[1], \
+		req->er_node_id[2], req->er_node_id[3], \
+		req->er_node_id[4], req->er_node_id[5] );
+	printf(" - rpl_owner=%d\n", req->er_rpl_owner);
+	printf(" - rpl_neighbour=%d\n", req->er_rpl_neighbour);
+	printf(" - rpl_port_id=%d\n", req->er_rpl_port);
+#endif
+
+	return res;
 }
 
 int main(int argc, char **argv) {
@@ -161,6 +204,7 @@ int main(int argc, char **argv) {
 
 	while ((ch = getopt(argc, argv, "h")) != -1) {
 		switch (ch) {
+			break;
 		case 'h':
 		case '?':
 			exit_usage(0);
@@ -183,7 +227,7 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "error: ports not specified\n");
 			goto err;
 		}
-		init_ring(argv[1], argv[2], argc-2, argv+2);
+		init_ring(argc, argv);
 
 	} else { 
 		if (argc < 2) {
