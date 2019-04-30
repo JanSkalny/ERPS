@@ -190,6 +190,8 @@ static int er_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struc
 int er_module_init(void) {
 	int err;
 
+	er_global = 0;
+
 	err = make_dev_p(MAKEDEV_CHECKNAME|MAKEDEV_WAITOK, &cdev, &cdevsw, 0, UID_ROOT, GID_WHEEL, 0600, "erps");
 	if (err) {
 		E("failed to create erps device");

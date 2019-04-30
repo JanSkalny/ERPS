@@ -12,7 +12,7 @@
 //XXX: should be 300
 #define WTR_TIMER 15
 
-static struct er_ring *er_global = 0;
+struct er_ring *er_global = 0;
 
 const char *RING_STATE_STR[6] = { 
 	"INIT",
@@ -936,6 +936,7 @@ cleanup:
 	}
 
 */
+	E("failed to create ring!!");
 	er_free(ret);
 
 	return 0;

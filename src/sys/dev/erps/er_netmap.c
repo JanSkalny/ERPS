@@ -161,6 +161,7 @@ int er_netmap_regops(struct er_ring *ring) {
 
 #ifdef FBSD12
 	err = netmap_bdg_regops(ring->vale_name, &ops, 0, ring->vale_auth_token);
+	D("register custom ops (new)");
 #else
 	struct nmreq nmr;
 	bzero(&nmr, sizeof(nmr));
@@ -168,7 +169,7 @@ int er_netmap_regops(struct er_ring *ring) {
 	nmr.nr_cmd = NETMAP_BDG_REGOPS;
 	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "%s", ring->vale_name);
 	err = netmap_bdg_ctl(&nmr, &ops);
-	E("register custom ops");
+	D("register custom ops on %s", ring->vale_name);
 #endif
 	if (err) {
 		E("failed to register custom ops on %s bridge (errno=%d)", ring->vale_name, err);
@@ -183,13 +184,14 @@ static u_int er_netmap_on_recv(struct nm_bdg_fwd *ft, uint8_t *ring_nr, struct n
 	struct er_ring *ring;
 	struct er_port *recv_port=0;
 
+
 	// lookup ring, this bridge belongs to
 	//XXX: multi-ring support
 	// ring = (struct er_ring*) na->arg1;
-	ring = er_lookup_ring((uint16_t)ring_nr);
+	ring = er_lookup_ring(*ring_nr);
 
 	// drop frame, if no active ring is found
-	if (!ring || !ring->active)
+	if (!ring || !ring->active) 
 		return NM_BDG_NOPORT;
 
 	// is this port part of the ring?

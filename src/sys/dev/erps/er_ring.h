@@ -120,5 +120,5 @@ bool er_forward_lookup(struct er_ring *ring, struct er_port *recv_port, uint8_t 
 #define ER_RING_UNLOCK(_ring)    mtx_unlock(&(_ring)->mtx)
 #define ER_RING_LOCK_ASSERT(_ring)   mtx_assert(&(_ring)->mtx, MA_OWNED)
 
+extern struct er_ring *er_global;
 
-static struct er_ring *er_global;
