@@ -92,7 +92,7 @@ int er_netmap_get_indices(int ring_id, char *port_name, int *bridge_idx, int *po
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
 	nmr.nr_cmd = NETMAP_BDG_LIST;
-	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "valeERPS%d:%s", ring_id, port_name);
+	snprintf(nmr.nr_name, sizeof(nmr.nr_name)-1, "valeR%d:%s", ring_id, port_name);
 	err = netmap_bdg_ctl(&nmr, 0);
 	if (err) {
 		D("%s failed to get indices", port_name);

@@ -857,7 +857,7 @@ struct er_ring *er_ring_create(uint16_t ring_id, char *port0_name, char *port1_n
 
 	// netmap stuff
 	//XXX: should move this to er_netmap
-	snprintf(ret->vale_name, sizeof(ret->vale_name)-1, "valeERPS%d:", ring_id);
+	snprintf(ret->vale_name, sizeof(ret->vale_name)-1, "valeR%d:", ring_id);
 
 #ifdef FBSD12
 	ret->vale_auth_token = NULL;
@@ -1195,13 +1195,20 @@ bool er_forward_lookup(struct er_ring *ring, struct er_port *recv_port, uint8_t 
 
 		D("recvd R-APS on %d (%s)", recv_port->idx, recv_port->name);
 
+
+		char dbg[500], *xdbg=dbg;
 		int xlen = 20, i=0;;
 		uint8_t *xdata = data;
 		while (xlen-- > 0) {
-			printf("%02x", *(xdata++));
-			if (i++%4 == 3)
-				printf(" ");
+			sprintf(xdbg, "%02x", *(xdata++));
+			xdbg += 2;
+			if (i++%4 == 3) {
+				*xdbg = ' ';
+				xdbg++;
+			}
 		}
+		*xdbg = 0;
+		D("frame: %s", dbg);
 
 
 		// validate R-APS before processing/forwarding
